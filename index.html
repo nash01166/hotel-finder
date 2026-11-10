@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>附近旅館搜尋</title>
+<meta name="theme-color" content="#1f6feb">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --text: #1d2330;
+    --muted: #667085;
+    --border: #e3e6eb;
+    --accent: #1f6feb;
+    --accent-soft: #e8f0fe;
+    --hotel: #1f6feb;
+    --guest_house: #2e9d5b;
+    --hostel: #d97706;
+    --motel: #c0398b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  h1 { font-size: 17px; margin: 0; }
+  .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .search { display: flex; gap: 6px; }
+  .search input {
+    flex: 1; min-width: 0;
+    padding: 9px 10px; font-size: 16px;
+    border: 1px solid var(--border); border-radius: 8px;
+  }
+  button, select {
+    font: inherit; font-size: 14px;
+    padding: 8px 10px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel); color: var(--text);
+    cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 5px 10px; border-radius: 999px;
+    border: 1px solid var(--border); font-size: 13px;
+    user-select: none; cursor: pointer;
+  }
+  .chip input { display: none; }
+  .chip .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .chip:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); }
+  .chip:not(:has(input:checked)) { opacity: .55; }
+  main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  #map { height: 40vh; flex: none; }
+  #side { flex: 1; overflow-y: auto; min-height: 0; }
+  #status { padding: 10px 12px; color: var(--muted); font-size: 14px; }
+  #status.error { color: #b42318; }
+  .gbtn {
+    display: inline-block; margin-top: 6px;
+    padding: 7px 10px; border-radius: 8px;
+    background: var(--accent-soft); color: var(--accent);
+    text-decoration: none; font-size: 13px;
+  }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li.item {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 12px; cursor: pointer;
+  }
+  li.item.active { background: var(--accent-soft); }
+  .item .top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .item .name { font-weight: 600; font-size: 15px; }
+  .item .dist { color: var(--muted); font-size: 13px; white-space: nowrap; }
+  .item .meta { font-size: 13px; color: var(--muted); margin-top: 3px; }
+  .item .tag { display: inline-block; padding: 1px 7px; border-radius: 999px; color: #fff; font-size: 12px; margin-right: 6px; }
+  .item .stars { color: #e3a008; }
+  .item .links { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; font-size: 13px; }
+  .item .links a { color: var(--accent); text-decoration: none; }
+  footer { font-size: 11px; color: var(--muted); padding: 10px 12px; }
+  @media (min-width: 900px) {
+    main { flex-direction: row-reverse; }
+    #map { height: auto; flex: 1; }
+    #side { flex: none; width: 400px; border-right: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>🏨 附近旅館搜尋</h1>
+  <form class="search" id="searchForm">
+    <input id="place" type="search" placeholder="輸入地點，例如：台南火車站" autocomplete="off">
+    <button type="submit" class="primary">搜尋</button>
+    <button type="button" id="gpsBtn" title="使用我的位置">📍</button>
+  </form>
+  <div class="row">
+    <select id="radius" aria-label="搜尋範圍">
+      <option value="1000">1 公里</option>
+      <option value="3000">3 公里</option>
+      <option value="5000">5 公里</option>
+      <option value="10000">10 公里</option>
+    </select>
+    <span id="types" class="row"></span>
+  </div>
+</header>
+<main>
+  <div id="map"></div>
+  <div id="side">
+    <div id="status">正在取得你的位置…</div>
+    <ul id="list"></ul>
+    <footer>資料來源：© OpenStreetMap 貢獻者。評分、照片與房價請點「Google 地圖」查看。</footer>
+  </div>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const TYPES = {
+  hotel:       { label: '飯店',     color: '#1f6feb' },
+  guest_house: { label: '民宿',     color: '#2e9d5b' },
+  hostel:      { label: '青年旅館', color: '#d97706' },
+  motel:       { label: '汽車旅館', color: '#c0398b' },
+};
+const OVERPASS = 'https://overpass-api.de/api/interpreter';
+const FEW = 3;
+const STORE_KEY = 'hotel-finder-settings';
+
+const $ = id => document.getElementById(id);
+const state = { center: null, centerLabel: '', results: [], markers: new Map(), activeId: null };
+
+// ---------- 設定（只存在這台瀏覽器） ----------
+function loadSettings() {
+  try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; }
+}
+function saveSettings() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({ radius: $('radius').value, types: selectedTypes() }));
+  } catch { /* 無痕模式等情況，忽略 */ }
+}
+const saved = loadSettings();
+$('radius').value = ['1000', '3000', '5000', '10000'].includes(saved.radius) ? saved.radius : '3000';
+const initTypes = Array.isArray(saved.types) ? saved.types : Object.keys(TYPES);
+for (const [key, t] of Object.entries(TYPES)) {
+  const label = document.createElement('label');
+  label.className = 'chip';
+  label.innerHTML = `<input type="checkbox" value="${key}" ${initTypes.includes(key) ? 'checked' : ''}><span class="dot" style="background:${t.color}"></span>${t.label}`;
+  $('types').appendChild(label);
+}
+function selectedTypes() {
+  return [...document.querySelectorAll('#types input:checked')].map(i => i.value);
+}
+
+// ---------- 地圖 ----------
+const map = L.map('map', { zoomControl: true }).setView([23.7, 121], 7);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+}).addTo(map);
+const layer = L.layerGroup().addTo(map);
+const centerLayer = L.layerGroup().addTo(map);
+
+// ---------- 工具 ----------
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function distance(a, b) {
+  const R = 6371000, rad = x => x * Math.PI / 180;
+  const dLat = rad(b.lat - a.lat), dLon = rad(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+const fmtDist = m => m < 1000 ? `${Math.round(m / 10) * 10} 公尺` : `${(m / 1000).toFixed(1)} 公里`;
+function zoomFor(radius) { return { 1000: 15, 3000: 14, 5000: 13, 10000: 12 }[radius] || 14; }
+function googleNearbyUrl(c, radius) {
+  return `https://www.google.com/maps/search/${encodeURIComponent('住宿')}/@${c.lat},${c.lon},${zoomFor(radius)}z`;
+}
+function googlePlaceUrl(h) {
+  return `https://www.google.com/maps/search/${encodeURIComponent(h.name)}/@${h.lat},${h.lon},17z`;
+}
+function setStatus(html, isError = false) {
+  $('status').innerHTML = html;
+  $('status').className = isError ? 'error' : '';
+}
+function address(tags) {
+  if (tags['addr:full']) return tags['addr:full'];
+  const parts = ['addr:city', 'addr:district', 'addr:suburb', 'addr:street', 'addr:housenumber']
+    .map(k => tags[k]).filter(Boolean);
+  let s = parts.join('');
+  if (tags['addr:housenumber'] && !/號$/.test(s)) s += '號';
+  return parts.length ? s : '';
+}
+
+// ---------- 取得資料 ----------
+async function fetchOverpass(c, radius) {
+  const q = `[out:json][timeout:25];
+nwr["tourism"~"^(hotel|guest_house|hostel|motel)$"](around:${radius},${c.lat},${c.lon});
+out center tags;`;
+  let lastErr;
+  // 回「太忙」(429/504) 時等 3 秒再試一次；卡住超過 30 秒就放棄，交給 Nominatim 備援
+  for (const [i, url] of [OVERPASS, OVERPASS].entries()) {
+    if (i === 1) {
+      if (!/HTTP (429|504)/.test(String(lastErr))) break;
+      await new Promise(r => setTimeout(r, 3000));
+    }
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 30000);
+    try {
+      const res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(q), signal: ctl.signal,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return (await res.json()).elements;
+    } catch (e) { lastErr = e; } finally { clearTimeout(timer); }
+  }
+  throw lastErr;
+}
+
+// 備援：Overpass 全部失敗時，改用 Nominatim 分類搜尋（每類最多 40 筆，依使用規範每秒最多 1 次）
+async function fetchNominatim(c, radius) {
+  const dLat = radius / 111320, dLon = radius / (111320 * Math.cos(c.lat * Math.PI / 180));
+  const vb = [c.lon - dLon, c.lat + dLat, c.lon + dLon, c.lat - dLat].join(',');
+  const out = [];
+  for (const [i, type] of Object.keys(TYPES).entries()) {
+    if (i) await new Promise(r => setTimeout(r, 1100));
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=40&bounded=1&addressdetails=1&extratags=1` +
+      `&accept-language=zh-TW&viewbox=${vb}&q=${encodeURIComponent('[' + type + ']')}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    for (const r of await res.json()) {
+      if (r.category !== 'tourism') continue;
+      const a = r.address || {};
+      const tags = { ...(r.extratags || {}), name: r.name, tourism: r.type,
+        'addr:city': a.city || a.county || '', 'addr:district': a.city_district || a.suburb || a.town || '',
+        'addr:street': a.road || '', 'addr:housenumber': a.house_number || '' };
+      out.push({ type: r.osm_type, id: r.osm_id, lat: +r.lat, lon: +r.lon, tags });
+    }
+  }
+  return out;
+}
+
+function normalize(el, c) {
+  const tags = el.tags || {};
+  const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon;
+  const name = tags['name:zh'] || tags.name || tags['name:en'];
+  if (lat == null || !name) return null;
+  const stars = parseInt(tags.stars, 10);
+  return {
+    id: `${el.type}/${el.id}`,
+    name, lat, lon,
+    type: tags.tourism,
+    dist: distance(c, { lat, lon }),
+    address: address(tags),
+    phone: tags.phone || tags['contact:phone'] || '',
+    website: tags.website || tags['contact:website'] || '',
+    stars: stars >= 1 && stars <= 5 ? stars : 0,
+  };
+}
+
+async function search(c, label) {
+  state.center = c;
+  state.centerLabel = label;
+  const radius = +$('radius').value;
+  centerLayer.clearLayers();
+  L.circle([c.lat, c.lon], { radius, color: '#1f6feb', weight: 1, fillOpacity: .04 }).addTo(centerLayer);
+  L.circleMarker([c.lat, c.lon], { radius: 7, color: '#fff', weight: 2, fillColor: '#1f6feb', fillOpacity: 1 })
+    .bindTooltip(label || '搜尋中心').addTo(centerLayer);
+  map.setView([c.lat, c.lon], zoomFor(radius));
+  layer.clearLayers();
+  $('list').innerHTML = '';
+  setStatus(`正在搜尋 ${esc(label)} 附近 ${radius / 1000} 公里內的住宿…`);
+  try {
+    let els;
+    state.fallback = false;
+    try {
+      els = await fetchOverpass(c, radius);
+    } catch (e) {
+      console.warn('Overpass 失敗，改用 Nominatim', e);
+      setStatus('主要資料伺服器忙碌，改用備援來源搜尋中…');
+      els = await fetchNominatim(c, radius);
+      state.fallback = true;
+    }
+    // 同名（不分大小寫、空白）且相距 150 公尺內視為同一間，保留資料較完整的那筆
+    const score = h => !!h.address + !!h.phone + !!h.website + !!h.stars;
+    const kept = [];
+    for (const h of els.map(e => normalize(e, c)).filter(h => h && TYPES[h.type] && h.dist <= radius)) {
+      const key = h.name.toLowerCase().replace(/\s+/g, '');
+      const i = kept.findIndex(k => k.key === key && distance(k.h, h) < 150);
+      if (i < 0) kept.push({ key, h });
+      else if (score(h) > score(kept[i].h)) kept[i].h = h;
+    }
+    state.results = kept.map(k => k.h).sort((a, b) => a.dist - b.dist);
+    render();
+  } catch (e) {
+    console.error(e);
+    setStatus(`搜尋失敗（OpenStreetMap 伺服器忙碌或連線問題），請稍後再試。<br>
+      <a class="gbtn" target="_blank" rel="noopener" href="${googleNearbyUrl(c, radius)}">改用 Google 地圖搜尋附近住宿 ↗</a>`, true);
+  }
+}
+
+// ---------- 畫面 ----------
+function render() {
+  const c = state.center;
+  if (!c) return;
+  const radius = +$('radius').value;
+  const types = selectedTypes();
+  const shown = state.results.filter(h => types.includes(h.type));
+  layer.clearLayers();
+  state.markers.clear();
+  const gLink = `<a class="gbtn" target="_blank" rel="noopener" href="${googleNearbyUrl(c, radius)}">用 Google 地圖搜尋這附近所有住宿 ↗</a>`;
+
+  if (shown.length < FEW) {
+    const bigger = radius < 10000 ? '試試把範圍放大，或' : '';
+    setStatus(`${esc(state.centerLabel)} 附近 ${radius / 1000} 公里內只找到 ${shown.length} 間。${bigger}到 Google 地圖找看看（OpenStreetMap 的民宿資料不完整）。<br>${gLink}`);
+  } else {
+    setStatus(`${esc(state.centerLabel)} 附近 ${radius / 1000} 公里內找到 ${shown.length} 間，依距離排序。<br>${gLink}`);
+  }
+  if (state.fallback) {
+    $('status').insertAdjacentHTML('afterbegin', '⚠️ 主要資料伺服器忙碌，以下是備援來源的結果，可能不完整，稍後重新搜尋可取得完整清單。<br>');
+  }
+
+  $('list').innerHTML = shown.map(h => {
+    const t = TYPES[h.type];
+    const links = [
+      `<a target="_blank" rel="noopener" href="${googlePlaceUrl(h)}">⭐ Google 地圖看評價</a>`,
+      h.phone ? `<a href="tel:${esc(h.phone.split(';')[0].replace(/\s/g, ''))}">📞 ${esc(h.phone.split(';')[0])}</a>` : '',
+      h.website ? `<a target="_blank" rel="noopener" href="${esc(/^https?:/i.test(h.website) ? h.website : 'https://' + h.website)}">🌐 網站</a>` : '',
+    ].filter(Boolean).join('');
+    return `<li class="item" data-id="${esc(h.id)}">
+      <div class="top"><span class="name">${esc(h.name)}</span><span class="dist">${fmtDist(h.dist)}</span></div>
+      <div class="meta"><span class="tag" style="background:${t.color}">${t.label}</span>${h.stars ? `<span class="stars">${'★'.repeat(h.stars)}</span> ` : ''}${esc(h.address)}</div>
+      <div class="links">${links}</div>
+    </li>`;
+  }).join('');
+
+  for (const h of shown) {
+    const m = L.circleMarker([h.lat, h.lon], { radius: 8, color: '#fff', weight: 2, fillColor: TYPES[h.type].color, fillOpacity: .95 })
+      .bindPopup(`<b>${esc(h.name)}</b><br>${TYPES[h.type].label}・${fmtDist(h.dist)}<br><a target="_blank" rel="noopener" href="${googlePlaceUrl(h)}">Google 地圖看評價 ↗</a>`)
+      .on('click', () => activate(h.id, false))
+      .addTo(layer);
+    state.markers.set(h.id, m);
+  }
+  if (state.activeId && state.markers.has(state.activeId)) activate(state.activeId, false, true);
+}
+
+function activate(id, fromList, silent = false) {
+  state.activeId = id;
+  document.querySelectorAll('li.item').forEach(li => li.classList.toggle('active', li.dataset.id === id));
+  const m = state.markers.get(id);
+  if (!m || silent) return;
+  if (fromList) {
+    map.setView(m.getLatLng(), Math.max(map.getZoom(), 16));
+    m.openPopup();
+  } else {
+    document.querySelector(`li.item[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+}
+
+$('list').addEventListener('click', e => {
+  if (e.target.closest('a')) return;
+  const li = e.target.closest('li.item');
+  if (li) activate(li.dataset.id, true);
+});
+
+// ---------- 定位與地址搜尋 ----------
+function useGps() {
+  if (!navigator.geolocation) { setStatus('這個瀏覽器不支援定位，請在上方輸入地點。', true); return; }
+  setStatus('正在取得你的位置…');
+  navigator.geolocation.getCurrentPosition(
+    p => search({ lat: p.coords.latitude, lon: p.coords.longitude }, '你的位置'),
+    err => setStatus(err.code === 1
+      ? '無法使用定位（權限被拒絕）。請在上方輸入地點，或到瀏覽器設定允許定位。'
+      : '取得位置失敗，請在上方輸入地點。', true),
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+}
+
+async function geocode(q) {
+  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&accept-language=zh-TW&q=${encodeURIComponent(q)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const [r] = await res.json();
+  return r ? { lat: +r.lat, lon: +r.lon } : null;
+}
+
+$('searchForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const q = $('place').value.trim();
+  if (!q) { useGps(); return; }
+  $('place').blur();
+  setStatus(`正在尋找「${esc(q)}」…`);
+  try {
+    const c = await geocode(q);
+    if (!c) { setStatus(`找不到「${esc(q)}」，換個說法試試（例如加上縣市名稱）。`, true); return; }
+    search(c, q);
+  } catch {
+    setStatus('地址搜尋失敗，請稍後再試。', true);
+  }
+});
+$('gpsBtn').addEventListener('click', () => { $('place').value = ''; useGps(); });
+$('radius').addEventListener('change', () => { saveSettings(); if (state.center) search(state.center, state.centerLabel); });
+$('types').addEventListener('change', () => { saveSettings(); render(); });
+
+useGps();
+</script>
+</body>
+</html>

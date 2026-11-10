@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "hotel-finder",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["-y", "http-server", "C:/Users/User/hotel-finder", "-p", "8765", "-c-1"],
+      "port": 8765
+    }
+  ]
+}
